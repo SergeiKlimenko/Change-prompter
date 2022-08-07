@@ -1,0 +1,33 @@
+Public oldvalues() As Variant
+Public oldtableheader() As Variant
+Public SheetStoreName As String  'Found online: I use this variable to make sure that the changes I captures are in the same active sheet to prevent overwrite
+Public SheetStoreNameHeader As String
+
+
+'Store all sheet values in a hidden sheet on activation and opening the workbook
+Function UpdateCache(Sh As Object)
+    
+    If Sh.Name = ActiveSheet.Name Then ' update values only if the changed values are in the activesheet
+        SheetStoreName = Sh.Name
+        Dim databaseArea As Range
+        Set databaseArea = ActiveSheet.ListObjects("Database").DataBodyRange
+        ReDim oldvalues(1 To databaseArea.Rows.Count, 1 To databaseArea.Columns.Count)
+        oldvalues = databaseArea.Formula
+        UpdateCache = oldvalues
+    End If
+
+End Function
+
+
+'Store the table header in a hidden sheet on activation and opening the workbook
+Function StoreHeader(Sh As Object)
+
+    If Sh.Name = ActiveSheet.Name Then
+        SheetStoreNameHeader = Sh.Name & "_header"
+        Dim tableHeader As Range
+        Set tableHeader = ActiveSheet.ListObjects("Database").HeaderRowRange
+        ReDim oldtableheader(1 To tableHeader.Columns.Count)
+        oldtableheader = tableHeader.Formula
+        StoreHeader = oldtableheader
+    End If
+End Function
