@@ -1,0 +1,250 @@
+Option Explicit
+
+Dim database As ListObject
+
+Private Sub Worksheet_Activate()
+    
+    oldvalues = UpdateCache(ActiveSheet)
+    oldtableheader = StoreHeader(ActiveSheet)
+    
+End Sub
+
+
+'Check if there cell was empty and if not, activate the prompt
+Private Sub Worksheet_Change(ByVal Target As Range)
+        
+    'Don't let sorting trigger the change sequence
+    Dim lastUndoStackItem As String
+    Dim lastRedoStackItem As String
+    On Error Resume Next
+        lastUndoStackItem = Application.CommandBars("Standard").FindControl(ID:=128).List(1)
+        lastRedoStackItem = Application.CommandBars("standard").FindControl(ID:=129).List(1)
+    
+    If lastUndoStackItem = "Sort" Or lastUndoStackItem Like "Insert *" Or lastRedoStackItem = "Delete Row" Or lastRedoStackItem = "Delete Column" Then
+        oldvalues = UpdateCache(ActiveSheet)
+        oldtableheader = StoreHeader(ActiveSheet)
+        Exit Sub
+    End If
+    
+    'Prevent change firing twice for the table header
+    If Target.Count = 1 And CStr(Target(1).Value) Like "Column*" Then
+        Application.EnableEvents = False
+        Application.Undo
+        Application.EnableEvents = True
+    End If
+    
+    Call ConfirmChange(Target, oldvalues)
+    
+End Sub
+
+
+'Ask user to confirm change
+Sub ConfirmChange(cellrange, oldvalues)
+    
+    Set database = ActiveSheet.ListObjects("Database")
+    
+    Application.EnableEvents = False
+        
+    'Intersection of the selection and the Database table
+    Dim intersection
+    Set intersection = Intersect(cellrange, Range(Cells(LBound(oldvalues, 1) + 1, LBound(oldvalues, 2)), _
+        Cells(UBound(oldvalues, 1) + 1, UBound(oldvalues, 2))))
+    
+    'Test if the selection is within the table Database
+    If Not intersection Is Nothing Then
+    
+        'Test if the changed intersection cells were empty
+        Dim hasContents As Boolean
+        Dim cel As Variant
+        For Each cel In intersection
+            If oldvalues(cel.Row - 1, cel.Column) <> "" And _
+            CStr(oldvalues(cel.Row - 1, cel.Column)) <> CStr(cel.Value) Then
+                hasContents = True
+                Call FindChanges(oldvalues, intersection)
+                Exit For
+            End If
+        Next
+        
+        If hasContents = False Then
+            For Each cel In intersection
+                oldvalues(cel.Row - 1, cel.Column) = cel.Value
+            Next
+        End If
+        
+    End If
+    
+    oldvalues = UpdateCache(ActiveSheet)
+    oldtableheader = StoreHeader(ActiveSheet)
+    
+    Application.EnableEvents = True
+
+End Sub
+
+
+'Generate the message depending on if the cells contents were deleted or replaced
+Function msg(emptyStatus As Boolean, cellrange, oldvalues)
+    
+    Dim completeRows As Dictionary
+    Set completeRows = getCompleteRows(cellrange, oldvalues)
+    Dim completeColumns As Dictionary
+    Set completeColumns = getCompleteColumns(cellrange, oldvalues)
+        
+    'Get the number of rows in cellrange counting all the areas
+    Dim cellrangeRowCount As Integer
+    Dim i
+    For i = 1 To cellrange.Areas.Count
+        Dim j
+        For j = 1 To cellrange.Areas(i).Rows.Count
+            cellrangeRowCount = cellrangeRowCount + 1
+        Next j
+    Next i
+    
+    'Disallow altering multiple cells
+    If (completeRows.Count > 0 And cellrange.Count Mod UBound(oldvalues, 2) <> 0) Or _
+        (completeColumns.Count > 0 And cellrange.Count Mod UBound(oldvalues, 1) <> 0) Then
+        msg = False
+        Exit Function
+    ElseIf completeRows.Count = 0 And completeColumns.Count = 0 And cellrange.Count > 1 Then
+        msg = False
+        Exit Function
+    End If
+        
+    If emptyStatus = True Then
+         
+        If completeRows.Count > 0 Then
+            msg = "Are you sure that you wish to completely delete the following patients' record(s)?" & _
+                vbNewLine & vbNewLine
+            Dim rw As Variant
+            For Each rw In completeRows.Keys
+                msg = msg & completeRows(rw) & vbNewLine
+            Next
+            msg = msg & vbNewLine & vbNewLine
+        End If
+        
+        If completeColumns.Count > 0 Then
+            msg = "Are you sure that you wish to completely delete the following column(s)?" & _
+                vbNewLine & vbNewLine
+            Dim cl As Variant
+            For Each cl In completeColumns.Keys
+                'Msg = Msg & database.HeaderRowRange(cl) & vbNewLine
+                msg = msg & cl & vbNewLine
+            Next cl
+            msg = msg & vbNewLine & vbNewLine
+        End If
+        
+        If IsEmpty(msg) Then
+            msg = "Are you sure that you wish to delete the contents of the following cell?" & vbNewLine & vbNewLine
+        Else
+            If (completeRows.Count > 0 And completeRows.Count <> cellrangeRowCount) Or _
+            (completeColumns.Count > 0 And completeColumns.Count <> cellrange.Columns.Count) Then
+                msg = msg & "And the contents of the following cell(s)?" & vbNewLine & vbNewLine
+                msg = msg & "Address:" & vbTab & "Value:" & vbNewLine & vbNewLine
+            End If
+        End If
+        
+        Dim cel As Variant
+        For Each cel In cellrange
+'            If Not (completeRows.Exists(cel.Row) Or completeColumns.Exists(cel.Column)) Then
+            If Not (completeRows.Exists(cel.Row) Or completeColumns.Exists(oldtableheader(1, cel.Column))) Then
+                msg = msg & Replace(cel.Address, "$", "") & vbTab & CStr(oldvalues(cel.Row - 1, cel.Column)) & vbNewLine
+            End If
+        Next
+            
+    Else
+        msg = "Are you sure that you wish to change the contents of the following cell?" & _
+            vbNewLine & vbNewLine
+        msg = msg & "Address:" & vbTab & vbTab & Replace(cellrange(1).Address, "$", "") & _
+            vbNewLine & vbNewLine
+        msg = msg & "From:" & vbTab & vbTab & CStr(oldvalues(cellrange(1).Row - 1, cellrange(1).Column)) _
+            & vbNewLine & vbNewLine
+        msg = msg & "To:" & vbTab & vbTab & CStr(cellrange(1).Value)
+    End If
+                
+End Function
+
+
+'Launch the message box
+Sub TriggerMsgBox(message, intersection, oldvalues)
+    If message = False Then
+        MsgBox "You cannot alter multiple cells."
+        Application.Undo
+    Else
+        If MsgBox(message, vbYesNo + vbExclamation, "Confirm") = vbNo Then
+            Application.Undo
+        Else
+            Dim cel As Variant
+            For Each cel In intersection
+                oldvalues(cel.Row - 1, cel.Column) = cel.Value
+            Next
+        End If
+    End If
+End Sub
+
+
+
+Sub FindChanges(oldvalues, cellrange)
+       
+    Dim message
+    message = ChooseMessage(cellrange, oldvalues)
+   
+    Call TriggerMsgBox(message, cellrange, oldvalues)
+        
+End Sub
+
+
+
+Function ChooseMessage(intersection, oldvalues)
+        
+    'Test if cells contents were deleted
+    If IsEmpty(intersection(1)) Or database.DataBodyRange.Rows.Count < UBound(oldvalues, 1) Or _
+        database.DataBodyRange.Columns.Count < UBound(oldvalues, 2) Then
+        ChooseMessage = msg(True, intersection, oldvalues)
+    'Test if cells contents were replaced
+    Else
+        ChooseMessage = msg(False, intersection, oldvalues)
+    End If
+    
+End Function
+
+
+'Make a list of complete rows to be deleted
+Function getCompleteRows(cellrange, oldvalues) As Scripting.Dictionary
+
+    Set getCompleteRows = New Scripting.Dictionary
+
+    Dim i
+    For i = 1 To cellrange.Areas.Count
+    
+        Dim j
+        For j = 1 To cellrange.Areas(i).Rows.Count
+            'Make a list of complete rows in the table to be deleted
+            Dim currentRow As Range
+            Set currentRow = cellrange.Areas(i).Rows(j)
+            If currentRow.Columns.Count = UBound(oldvalues, 2) Then
+                getCompleteRows.Add currentRow.Row, oldvalues(currentRow.Row - 1, 1) & " " & _
+                oldvalues(currentRow.Row - 1, 2) & " " & oldvalues(currentRow.Row - 1, 3)
+            End If
+        Next j
+        
+    Next i
+    
+End Function
+
+
+'Make a list of complete columns to be deleted
+Function getCompleteColumns(cellrange, oldvalues) As Scripting.Dictionary
+
+    Set getCompleteColumns = New Scripting.Dictionary
+
+    Dim i
+    For i = 1 To cellrange.Columns.Count
+        'Make a list of complete rows in the table to be deleted
+        Dim currentColumn As Range
+        Set currentColumn = cellrange.Columns(i)
+        If currentColumn.Rows.Count = UBound(oldvalues, 1) Then
+'            getCompleteColumns.Add currentColumn.Column, oldvalues(currentColumn.Column, 1)
+            getCompleteColumns.Add oldtableheader(1, currentColumn.Column), oldvalues(currentColumn.Column, 1)
+        End If
+    Next
+
+End Function
