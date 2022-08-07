@@ -1,0 +1,10 @@
+Option Explicit
+
+Private Sub Workbook_Open()
+    
+    If ActiveSheet.Name = "Active patients" Then
+        oldvalues = UpdateCache(ActiveSheet)
+        oldtableheader = StoreHeader(ActiveSheet)
+    End If
+    
+End Sub
